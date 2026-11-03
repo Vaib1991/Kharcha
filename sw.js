@@ -1,6 +1,6 @@
 // Serves the app itself offline. Requests to your Google backend are left untouched.
 // Change VERSION whenever any app file changes, so that devices pick up the update.
-const VERSION = 'kharcha-v1';
+const VERSION = 'kharcha-v10';
 const FILES = [
   './',
   'index.html',

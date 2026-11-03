@@ -13,6 +13,7 @@
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-title" content="Kharcha">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<script>try { var t = localStorage.getItem('kharcha-theme'); if (t === 'light' || t === 'dark') document.documentElement.dataset.theme = t; } catch (e) {}</script>
 <link rel="stylesheet" href="styles.css">
 </head>
 <body data-view="add" class="booting">
@@ -39,6 +40,7 @@
     </label>
     <p id="setup-error" class="form-error" role="alert" hidden></p>
     <button type="submit" id="setup-go" class="primary">Connect</button>
+    <button type="button" id="setup-cancel" class="plain" hidden>Cancel</button>
   </form>
 </section>
 
@@ -54,11 +56,12 @@
   <main class="views">
     <section id="view-add" class="view view-add" aria-label="Add an expense">
       <header class="page-top">
-        <p class="today">Today <strong id="today-total">₹0</strong></p>
+        <div class="book-switch" role="group" aria-label="Book"></div>
         <button type="button" id="sync-status" class="sync" aria-live="polite">Starting</button>
       </header>
 
       <div class="amount-line">
+        <p class="today">Today <strong id="today-total">₹0</strong></p>
         <output id="amount" class="amount" aria-live="polite"><span class="rupee">₹</span><span id="amount-digits">0</span></output>
       </div>
 
@@ -67,8 +70,15 @@
           <span id="date-label">Today</span>
           <input id="entry-date" type="date" aria-label="Expense date">
         </label>
-        <div id="via-chips" class="via" role="group" aria-label="Paid via"></div>
+        <div id="via-chips" class="via-chips" role="group" aria-label="Paid via"></div>
       </div>
+
+      <div class="draft-line">
+        <input id="pad-name" type="text" maxlength="120" autocomplete="off" aria-label="Expense name, optional" placeholder="Expense name">
+        <label class="plain file-pick pad-pick">Photo<input id="pad-photo" type="file" accept="image/*" capture="environment"></label>
+        <label class="plain file-pick pad-pick">Invoice<input id="pad-file" type="file" multiple></label>
+      </div>
+      <div id="pad-files" class="pad-files" hidden></div>
 
       <div class="cloth">
         <p id="hint" class="hint">Enter the amount</p>
@@ -94,6 +104,7 @@
           <button type="button" class="month-next" aria-label="Next month">›</button>
         </div>
       </header>
+      <div class="book-switch page-book" role="group" aria-label="Book"></div>
       <div id="person-filter" class="person-filter" role="group" aria-label="Filter by person"></div>
       <div id="history-list" class="ledger"></div>
     </section>
@@ -107,44 +118,121 @@
           <button type="button" class="month-next" aria-label="Next month">›</button>
         </div>
       </header>
+      <div class="book-switch page-book" role="group" aria-label="Book"></div>
       <div id="summary-body"></div>
     </section>
 
     <section id="view-settings" class="view view-page" aria-label="Settings">
       <header class="page-head"><h2>Settings</h2></header>
+      <div class="theme-row">
+        <span>Theme</span>
+        <div id="theme-switch" class="theme-switch" role="group" aria-label="Theme">
+          <button type="button" data-choice="system">System</button>
+          <button type="button" data-choice="light">Light</button>
+          <button type="button" data-choice="dark">Dark</button>
+        </div>
+      </div>
       <dl class="facts">
         <div><dt>Your name</dt><dd id="set-name"></dd></div>
         <div><dt>Last synced</dt><dd id="set-last"></dd></div>
         <div><dt>Waiting to sync</dt><dd id="set-waiting"></dd></div>
       </dl>
+      <div class="manage">
+        <details id="m-cats"><summary>Categories and subcategories</summary><div id="m-cats-body"></div></details>
+        <details id="m-pay"><summary>Payment methods</summary><div id="m-pay-body"></div></details>
+        <details id="m-labels"><summary>Labels</summary><div id="m-labels-body"></div></details>
+        <details id="m-people"><summary>People and access</summary><div id="m-people-body"></div></details>
+      </div>
       <div class="stack">
         <button type="button" id="btn-sync" class="plain">Sync now</button>
+        <button type="button" id="btn-accounts" class="plain">Switch or add account</button>
+        <button type="button" id="btn-lock" class="plain">Lock now</button>
+        <button type="button" id="btn-pin" class="plain">Change PIN</button>
         <button type="button" id="btn-code" class="plain">Copy setup code for another device</button>
-        <p id="code-note" class="note" hidden>Copied. Paste it into Kharcha on the other device. It works like a password, so send it only to your own devices or your spouse.</p>
+        <p id="code-note" class="note" hidden>Copied. Paste it into Kharcha on the other device. It works like a password, so use it only on your own devices. To give someone else access, add them under People and access.</p>
         <button type="button" id="btn-refresh" class="plain">Reload everything from the Sheet</button>
-        <p class="note">Categories and payment methods are edited in the Settings tab of your Google Sheet.</p>
-        <button type="button" id="btn-disconnect" class="plain danger">Disconnect this device</button>
+                <button type="button" id="btn-disconnect" class="plain danger">Disconnect this device</button>
       </div>
     </section>
   </main>
 </div>
 
-<div id="toast" class="toast" role="status" hidden>
-  <span id="toast-text"></span>
-  <button type="button" id="toast-note" hidden>Add note</button>
-  <button type="button" id="toast-undo" hidden>Undo</button>
+<section id="lock" class="lock" aria-label="PIN" hidden>
+  <div class="lock-top">
+    <h1>Kharcha</h1>
+    <p id="lock-title" class="lock-title"></p>
+    <div id="lock-dots" class="dots" aria-hidden="true"><span></span><span></span><span></span><span></span></div>
+    <p id="lock-msg" class="lock-msg" role="alert"></p>
+  </div>
+  <div class="cloth lock-pad">
+    <div class="keys" role="group" aria-label="PIN keypad">
+      <button type="button" data-pin="1">1</button><button type="button" data-pin="2">2</button><button type="button" data-pin="3">3</button>
+      <button type="button" data-pin="4">4</button><button type="button" data-pin="5">5</button><button type="button" data-pin="6">6</button>
+      <button type="button" data-pin="7">7</button><button type="button" data-pin="8">8</button><button type="button" data-pin="9">9</button>
+      <span></span><button type="button" data-pin="0">0</button>
+      <button type="button" data-pin="back" aria-label="Delete last digit">
+        <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M9 5h11v14H9l-6-7zM12.5 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+      </button>
+    </div>
+    <div class="lock-links">
+      <button type="button" id="pin-accounts" hidden>Switch account</button>
+      <button type="button" id="pin-forgot" hidden>Forgot PIN</button>
+      <button type="button" id="pin-cancel" hidden>Cancel</button>
+    </div>
+  </div>
+</section>
+
+<div id="toast" class="toast role="status" hidden>
+  <div class="toast-head">
+    <svg class="toast-check" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
+    <div class="toast-words">
+      <span id="toast-text"></span>
+      <span id="toast-sub"></span>
+      <span id="toast-sync"></span>
+    </div>
+  </div>
+  <div class="toast-actions">
+    <button type="button" id="toast-undo" hidden>Undo</button>
+    <button type="button" id="toast-note" hidden>Add details</button>
+  </div>
+  <span class="toast-time" aria-hidden="true"></span>
 </div>
 
 <dialog id="edit" class="sheet" aria-labelledby="edit-title">
   <form id="edit-form" method="dialog" novalidate>
     <h2 id="edit-title">Edit expense</h2>
-    <label>Amount (₹)<input id="edit-amount" type="text" inputmode="decimal" autocomplete="off"></label>
-    <label>Category<select id="edit-category"></select></label>
+    <label>Expense name<input id="edit-item" type="text" maxlength="120" autocomplete="off" placeholder="For example, Airtel broadband bill"></label>
+    <label>Receipt or reference no.<input id="edit-receipt" type="text" maxlength="60" autocomplete="off" placeholder="Optional"></label>
+    <label>Note<input id="edit-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional"></label>
     <div class="two">
+      <label>Amount (₹)<input id="edit-amount" type="text" inputmode="decimal" autocomplete="off"></label>
       <label>Date<input id="edit-date" type="date"></label>
+    </div>
+    <div class="two">
+      <label>Book<select id="edit-book"></select></label>
       <label>Paid via<select id="edit-via"></select></label>
     </div>
-    <label>Note<input id="edit-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional"></label>
+    <div class="two">
+      <label>Category<select id="edit-category"></select></label>
+      <label id="edit-sub-field">Subcategory<select id="edit-sub"></select></label>
+    </div>
+    <div class="labels-box">
+      <span class="files-label">Labels</span>
+      <div id="edit-labels" class="label-chips" role="group" aria-label="Labels"></div>
+      <div class="label-add">
+        <input id="edit-new-label" type="text" maxlength="80" autocomplete="off" aria-label="New label" placeholder="New label">
+        <button type="button" id="edit-add-label" class="plain">Add</button>
+      </div>
+    </div>
+    <div class="files-box">
+      <span class="files-label">Files</span>
+      <ul id="edit-files" class="file-list"></ul>
+      <div class="file-buttons">
+        <label class="plain file-pick">Attach file<input id="pick-file" type="file" multiple></label>
+        <label class="plain file-pick">Take photo<input id="pick-photo" type="file" accept="image/*" capture="environment"></label>
+      </div>
+      <p class="note">Up to 10 files, 10 MB each. Photos are made smaller to save space.</p>
+    </div>
     <p id="edit-by" class="note"></p>
     <p id="edit-error" class="form-error" role="alert" hidden></p>
     <div class="sheet-actions">
@@ -153,6 +241,77 @@
       <button type="submit" class="primary">Save changes</button>
     </div>
   </form>
+</dialog>
+
+<dialog id="via-picker" class="sheet" aria-labelledby="via-title">
+  <h2 id="via-title">Paid via</h2>
+  <div id="via-list" class="via-list"></div>
+  <div class="sheet-actions">
+    <button type="button" id="via-manage" class="plain">Manage payment methods</button>
+    <button type="button" id="via-close" class="plain">Close</button>
+  </div>
+</dialog>
+
+<dialog id="list-edit" class="sheet" aria-labelledby="list-title">
+  <form id="list-form" novalidate>
+    <h2 id="list-title"></h2>
+    <label id="list-type-field">Type<select id="list-type"></select></label>
+    <label>Name<input id="list-name" type="text" maxlength="80" autocomplete="off"></label>
+    <label id="list-linked-field">Linked bank account or card<input id="list-linked" type="text" maxlength="80" autocomplete="off" placeholder="For example, ICICI savings"></label>
+    <label id="list-owner-field">Belongs to<select id="list-owner"></select></label>
+    <p id="list-note" class="note"></p>
+    <p id="list-error" class="form-error" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="list-cancel" class="plain">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="accounts" class="sheet" aria-labelledby="accounts-title">
+  <h2 id="accounts-title">Accounts on this device</h2>
+  <p class="note">Each account has its own expenses and PIN. Expenses sync only while their account is open.</p>
+  <div id="accounts-list" class="via-list"></div>
+  <div class="sheet-actions">
+    <button type="button" id="accounts-add" class="plain">Add account</button>
+    <button type="button" id="accounts-close" class="plain">Close</button>
+  </div>
+</dialog>
+
+<dialog id="person-edit" class="sheet" aria-labelledby="person-title">
+  <form id="person-form" novalidate>
+    <h2 id="person-title">Add a person</h2>
+    <label>Name<input id="person-name" type="text" maxlength="40" autocomplete="off"></label>
+    <label>Access<select id="person-access">
+      <option value="Staff">Office staff: own Office expenses only</option>
+      <option value="Full">Full access: everything</option>
+    </select></label>
+    <p id="person-error" class="form-error" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="person-cancel" class="plain">Cancel</button>
+      <button type="submit" id="person-save" class="primary">Create setup code</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="person-code" class="sheet" aria-labelledby="code-title">
+  <h2 id="code-title"></h2>
+  <p class="note">Send this to them privately. They paste it into Kharcha when connecting. It is shown only now, and it works like a password.</p>
+  <textarea id="code-text" rows="4" readonly aria-label="Setup code"></textarea>
+  <div class="sheet-actions">
+    <button type="button" id="code-copy" class="plain">Copy code</button>
+    <button type="button" id="code-done" class="primary">Done</button>
+  </div>
+</dialog>
+
+<dialog id="viewer" class="sheet viewer" aria-labelledby="viewer-title">
+  <h2 id="viewer-title"></h2>
+  <p id="viewer-msg" class="note"></p>
+  <img id="viewer-img" alt="" hidden>
+  <div class="sheet-actions">
+    <a id="viewer-save" class="plain link-button" hidden>Open or save file</a>
+    <button type="button" id="viewer-close" class="plain">Close</button>
+  </div>
 </dialog>
 
 <dialog id="confirm" class="sheet" aria-labelledby="confirm-title">
