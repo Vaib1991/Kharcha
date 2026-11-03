@@ -7,6 +7,9 @@ const DEFAULTS = {
   methods: ['UPI', 'Cash', 'Card'],
 };
 const BOOKS = ['Home', 'Office'];
+const REQUIRED_FIELDS = { invoice: 'invoice', receipt: 'receipt no.', via: 'payment method', date: 'date', name: 'item name' };
+const REQUIRED_LABELS = { invoice: 'Invoice or photo', receipt: 'Receipt or reference no.', via: 'Payment method', date: 'Date', name: 'Item name' };
+const REQUIRED_DEFAULTS = { Home: ['via', 'date'], Office: ['invoice', 'receipt', 'via', 'date', 'name'] };
 const PAY_TYPES = ['UPI', 'Credit card', 'RuPay on UPI', 'Debit card', 'Cash', 'Bank transfer', 'Cheque', 'Wallet', 'Other'];
 const PAY_SHORT = { 'Credit card': 'Credit', 'Debit card': 'Debit', 'Bank transfer': 'Transfer' };
 const PAY_EXAMPLES = {
@@ -156,8 +159,11 @@ const state = {
   date: null,          // null means today
   viaByBook: {},       // the last payment method used in each book
   lists: [],           // categories, subcategories, labels, payment methods
-  pickedCat: null,     // category waiting for a subcategory on the pad
+  needs: null,         // Expenses filter: null, 'all', or one required field
   draftFiles: [],      // files chosen on the pad before the expense is saved
+  cart: [],            // items on the pad: {name, category, sub, price}
+  target: null,        // which cart line the keypad fills; null means the total
+  padCat: { category: 'Other', sub: '' }, // category when there are no items
   book: 'Home',
   month: isoMonth(),
   filter: 'all',
@@ -266,7 +272,7 @@ function normaliseRow(r) {
     category: String(r.category || 'Other'), via: String(r.via || ''), note: String(r.note || ''),
     person: String(r.person || ''), book: String(r.book || 'Home'),
     item: String(r.item || ''), receipt: String(r.receipt || ''),
-    subcategory: String(r.subcategory || ''), labels: Array.isArray(r.labels) ? r.labels : [],
+    orderId: String(r.orderId || ''), subcategory: String(r.subcategory || ''), labels: Array.isArray(r.labels) ? r.labels : [],
     viaType: String(r.viaType || ''), viaLinked: String(r.viaLinked || ''),
     files: Array.isArray(r.files) ? r.files : [], deleted: !!r.deleted,
     created: Number(r.created) || 0, updated: Number(r.updated) || 0, dirty: 0,
@@ -659,8 +665,9 @@ function amountValue() {
 
 function pressKey(k) {
   $('toast').hidden = true; // starting the next entry dismisses the last confirmation
-  if (state.pickedCat) { state.pickedCat = null; renderCats(); }
-  let a = state.amount;
+  closeResults($('pad-results'));
+  const line = state.target === null ? null : state.cart[state.target];
+  let a = line ? line.price : state.amount;
   if (k === 'back') a = a.slice(0, -1);
   else if (k === '.') {
     if (a.includes('.')) return;
@@ -671,87 +678,169 @@ function pressKey(k) {
     if (dec === undefined && whole.length >= 8) return;
     a = a === '0' ? k : a + k;
   }
-  state.amount = a;
+  if (line) line.price = a; else state.amount = a;
   renderPad();
+  renderCartLines();
+}
+
+const showAmount = (text) => {
+  if (!text) return '0';
+  const [whole, dec] = text.split('.');
+  return inr.format(Number(whole || 0)) + (dec !== undefined ? '.' + dec : '');
+};
+
+// Turns the screen's contents into the expenses to save, or says what is missing.
+function buildRows() {
+  const typed = cleanListName($('pad-name').value);
+  const lines = [...state.cart];
+  const priced = lines.filter((l) => parseFloat(l.price) > 0);
+  const unpriced = lines.filter((l) => !(parseFloat(l.price) > 0));
+  const sum = priced.reduce((t, l) => t + toPaise(l.price), 0);
+  const entered = toPaise(amountValue());
+  const total = entered || sum;
+  const rows = priced.map((l) => ({ item: l.name, category: l.category, sub: l.sub, paise: toPaise(l.price), note: (l.note || '').trim() }));
+  const rest = total - sum;
+  if (!lines.length) {
+    if (entered) rows.push({ item: typed, category: state.padCat.category, sub: state.padCat.sub, paise: entered });
+    return { rows, total, problem: entered ? '' : 'Enter an amount' };
+  }
+  if (total && rest < 0) return { rows, total, problem: 'Total is less than the prices' };
+  if (unpriced.length) {
+    if (rest <= 0) return { rows, total, problem: lines.length > 1 ? 'Add prices or a total' : 'Enter a price' };
+    const first = unpriced[0];
+    rows.push({
+      item: unpriced.map((l) => l.name).join(', '), category: first.category, sub: first.sub, paise: rest,
+      note: unpriced.map((l) => (l.note || '').trim()).filter(Boolean).join(', ').slice(0, 300),
+    });
+  } else if (rest > 0) {
+    rows.push({ item: 'Other charges', category: 'Other', sub: '', paise: rest }); // delivery, taxes, tips
+  }
+  return { rows, total, problem: total ? '' : 'Enter a price' };
 }
 
 function renderPad() {
-  const a = state.amount;
-  let shown = '0';
-  if (a) {
-    const [whole, dec] = a.split('.');
-    shown = inr.format(Number(whole || 0)) + (dec !== undefined ? '.' + dec : '');
-  }
+  const line = state.target === null ? null : state.cart[state.target];
+  const built = buildRows();
+  const text = line ? line.price : (state.amount || (built.total && !state.amount ? String(fromPaise(built.total)) : ''));
+  const shown = showAmount(text);
   $('amount-digits').textContent = shown;
+  $('total-label').textContent = line ? `Price of ${line.name}` : (state.cart.length ? 'Total' : 'Amount');
   const box = $('amount');
-  box.classList.toggle('empty', !a);
+  box.classList.toggle('empty', !text);
   box.classList.toggle('long', shown.length > 9);
-  const ready = amountValue() > 0;
-  $('hint').textContent = state.pickedCat ? `Choose a subcategory of ${state.pickedCat} to save`
-    : ready ? 'Tap a category to save' : 'Enter the amount';
-  document.querySelectorAll('#cats button').forEach((b) => { b.disabled = !ready; });
+  $('total-row').classList.toggle('active', !line);
+  const save = $('save');
+  save.disabled = !!built.problem;
+  save.textContent = built.problem || `Save ${money(fromPaise(built.total))}`;
 }
 
 function renderCats() {
-  const box = $('cats');
-  const button = (text, cls, fn) => {
-    const b = el('button', cls, text);
-    b.type = 'button';
-    b.addEventListener('click', fn);
-    return b;
-  };
-  const picked = state.pickedCat;
-  if (picked) {
-    box.replaceChildren(
-      ...subsFor(state.book, picked).map((s) => button(s, '', () => logExpense(picked, s))),
-      button(`Just ${picked}`, 'just', () => logExpense(picked)),
-      button('Back', 'back', () => { state.pickedCat = null; renderCats(); }),
-    );
-  } else {
-    box.replaceChildren(...catsFor(state.book).map((c) => button(c, '', () => {
-      if (subsFor(state.book, c).length) { state.pickedCat = c; renderCats(); } else logExpense(c);
-    })));
-  }
   renderViaChips();
+  renderCartLines();
   renderPad();
+}
+
+function renderCartLines() {
+  const box = $('cart');
+  box.replaceChildren(...state.cart.map((line, i) => {
+    const row = el('div', `line${state.target === i ? ' active' : ''}`);
+    const name = el('button', 'line-name', line.name);
+    name.type = 'button';
+    name.setAttribute('aria-label', `${line.name}, ${line.category}. Change category`);
+    name.append(el('small', '', [line.category, line.sub].filter(Boolean).join(', ')));
+    name.addEventListener('click', () => openCatPicker((category, sub) => {
+      line.category = category;
+      line.sub = sub;
+      renderCartLines();
+    }));
+    const price = el('button', `line-price${line.price ? '' : ' empty'}`, line.price ? `₹${showAmount(line.price)}` : 'Price');
+    price.type = 'button';
+    price.setAttribute('aria-label', `Set the price of ${line.name}`);
+    price.addEventListener('click', () => { state.target = i; renderCartLines(); renderPad(); });
+    const rm = el('button', 'line-remove', '×');
+    rm.type = 'button';
+    rm.setAttribute('aria-label', `Remove ${line.name}`);
+    rm.addEventListener('click', () => {
+      state.cart.splice(i, 1);
+      state.target = state.cart.length ? state.cart.length - 1 : null;
+      renderCartLines();
+      renderPad();
+    });
+    row.append(name, price, rm);
+    if (line.note || line.noteOpen) {
+      const note = el('input', 'line-note');
+      note.type = 'text';
+      note.maxLength = 300;
+      note.value = line.note || '';
+      note.placeholder = 'Note, for example Flat 302';
+      note.setAttribute('aria-label', `Note for ${line.name}`);
+      note.addEventListener('input', () => { line.note = note.value; });
+      note.addEventListener('blur', () => {
+        line.noteOpen = false;
+        if (!(line.note || '').trim()) { line.note = ''; setTimeout(renderCartLines, 150); }
+      });
+      row.append(note);
+    } else {
+      const add = el('button', 'line-note-add', '+ Add note');
+      add.type = 'button';
+      add.setAttribute('aria-label', `Add a note to ${line.name}`);
+      add.addEventListener('click', () => {
+        line.noteOpen = true;
+        renderCartLines();
+        const box = $('cart').children[state.cart.indexOf(line)].querySelector('.line-note');
+        if (box) box.focus();
+      });
+      row.append(add);
+    }
+    return row;
+  }));
+  const quick = $('cart-quick');
+  const items = state.cart.length || !state.config ? [] : searchItems('', state.book).slice(0, 8);
+  quick.replaceChildren(...items.map((item) => {
+    const b = el('button', 'quick-item', item.name);
+    b.type = 'button';
+    b.addEventListener('click', () => pickDraftItem(item));
+    return b;
+  }));
+  quick.hidden = !items.length;
+}
+
+function openCatPicker(onChoose) {
+  const list = $('cat-list');
+  const show = (category) => {
+    const button = (text, sub, fn) => {
+      const b = el('button', 'via-option', text);
+      b.type = 'button';
+      if (sub) b.append(el('small', '', sub));
+      b.addEventListener('click', fn);
+      return b;
+    };
+    const done = (c, s) => { $('cat-picker').close(); onChoose(c, s); renderPad(); };
+    if (!category) {
+      $('cat-title').textContent = 'Category';
+      list.replaceChildren(...catsFor(state.book).map((c) => {
+        const subs = subsFor(state.book, c);
+        return button(c, subs.length ? `${subs.length} ${subs.length === 1 ? 'subcategory' : 'subcategories'}` : '',
+          () => (subs.length ? show(c) : done(c, '')));
+      }));
+    } else {
+      $('cat-title').textContent = category;
+      list.replaceChildren(
+        ...subsFor(state.book, category).map((s) => button(s, '', () => done(category, s))),
+        button(`Just ${category}`, '', () => done(category, '')),
+        button('Back', '', () => show(null)),
+      );
+    }
+  };
+  show(null);
+  $('cat-picker').showModal();
 }
 
 // One button per payment type that has a method. A tap uses that type's default.
 function renderViaChips() {
-  const box = $('via-chips');
   const now = currentVia();
-  const groups = groupByType(minePay());
-  if (!now || !groups.length) {
-    const b = el('button', 'via-empty', 'Add a payment method');
-    b.type = 'button';
-    b.addEventListener('click', () => { go('settings'); $('m-pay').open = true; });
-    box.replaceChildren(b);
-    return;
-  }
-  const order = groups.map(([type]) => type);
-  if (!order.includes(now.type)) order.unshift(now.type); // someone else's method, used on an edit
-  box.replaceChildren(...order.map((type) => {
-    const selected = type === now.type;
-    const b = el('button', '', selected ? now.name : (PAY_SHORT[type] || type));
-    b.type = 'button';
-    if (selected) {
-      b.id = 'via-chip';
-      b.setAttribute('aria-haspopup', 'dialog');
-      b.setAttribute('aria-label', `Paid via ${now.name}. Change`);
-      b.addEventListener('click', openViaPicker);
-    } else {
-      b.setAttribute('aria-label', `Pay by ${type}`);
-      b.dataset.type = type;
-      b.addEventListener('click', () => {
-        state.viaByBook[state.book] = defaultFor(type).id;
-        db.setMeta('viaByBook', state.viaByBook);
-        renderViaChips();
-      });
-    }
-    return b;
-  }));
-  const active = $('via-chip');
-  if (active && box.offsetParent) box.scrollLeft = Math.max(0, active.offsetLeft - box.offsetLeft - 8);
+  $('via-chip').textContent = now ? now.name : 'Add one';
+  $('via-cell').setAttribute('aria-label', now ? `Paid via ${now.name}. Change` : 'Add a payment method');
 }
 
 function renderBooks() {
@@ -765,7 +854,11 @@ function renderBooks() {
       b.setAttribute('aria-pressed', String(name === state.book));
       b.addEventListener('click', () => {
         state.book = name;
-        state.pickedCat = null;
+        if (state.book !== name) {
+          state.cart = [];
+          state.target = null;
+          state.padCat = { category: 'Other', sub: '' };
+        }
         db.setMeta('book', name);
         renderAll();
       });
@@ -777,11 +870,13 @@ function renderBooks() {
 function renderDraft() {
   const box = $('pad-files');
   box.hidden = !state.draftFiles.length;
+  $('attach-label').textContent = state.draftFiles.length ? `${state.draftFiles.length} added` : 'Add';
+  $('attach-chip').classList.toggle('filled', state.draftFiles.length > 0);
   box.replaceChildren(...state.draftFiles.map((f, i) => {
     const b = el('button', 'pad-file');
     b.type = 'button';
     b.setAttribute('aria-label', `Remove ${f.name}`);
-    b.append(el('span', '', f.name), document.createTextNode('\u00d7'));
+    b.append(el('span', '', f.name), document.createTextNode('×'));
     b.addEventListener('click', () => { state.draftFiles.splice(i, 1); renderDraft(); });
     return b;
   }));
@@ -789,15 +884,247 @@ function renderDraft() {
 
 function clearDraft() {
   state.draftFiles = [];
+  state.cart = [];
+  state.target = null;
+  state.amount = '';
+  state.padCat = { category: 'Other', sub: '' };
   $('pad-name').value = '';
   renderDraft();
+  closeResults($('pad-results'));
 }
 
 async function addDraftFiles(fileList) {
+  closeResults($('pad-results'));
   const { files, problems } = await prepareFiles(fileList, state.draftFiles.length);
   state.draftFiles.push(...files);
   renderDraft();
   if (problems.length) toast(problems.join(' '));
+}
+
+/* ---------- Item catalog and search ---------- */
+
+const norm = (s) => s.toLowerCase().replace(/[^a-z0-9&+\s]/g, ' ').replace(/\s+/g, ' ').trim();
+let builtIn = null;
+
+function catalogItems() {
+  if (builtIn) return builtIn;
+  builtIn = [];
+  (typeof CATALOG === 'undefined' ? [] : CATALOG).forEach(([book, category, sub, text]) => {
+    text.split('|').forEach((raw) => {
+      const [name, ...aliases] = raw.split('/');
+      builtIn.push({ name, book, category, sub, n: norm(name), a: aliases.map(norm), where: norm(`${category} ${sub}`) });
+    });
+  });
+  return builtIn;
+}
+
+function itemsFor(book) {
+  const added = liveList('item').filter((l) => l.book === book).map((l) => ({
+    name: l.name, book, category: l.type, sub: l.linked, custom: true, n: norm(l.name), a: [], where: norm(`${l.type} ${l.linked}`),
+  }));
+  const taken = new Set(added.map((i) => i.n));
+  return [...added, ...catalogItems().filter((i) => i.book === book && !taken.has(i.n))];
+}
+
+function itemUsage() {
+  const counts = new Map();
+  state.entries.forEach((e) => {
+    if (e.deleted || !e.item) return;
+    e.item.split(', ').forEach((name) => {
+      const k = norm(name);
+      counts.set(k, (counts.get(k) || 0) + 1);
+    });
+  });
+  return counts;
+}
+
+function scoreItem(item, q, words) {
+  let score = 0;
+  if (item.n === q) score = 200;
+  else if (item.n.startsWith(q)) score = 120;
+  else if (item.a.some((a) => a === q)) score = 115;
+  else if (item.a.some((a) => a.startsWith(q))) score = 100;
+  else if (item.n.split(' ').some((w) => w.startsWith(q))) score = 90;
+  else if (words.every((w) => item.n.split(' ').some((x) => x.startsWith(w)) || item.a.some((a) => a.split(' ').some((x) => x.startsWith(w))))) score = 75;
+  else if (words.every((w) => item.n.includes(w) || item.a.some((a) => a.includes(w)))) score = 50;
+  else if (words.every((w) => item.where.includes(w))) score = 25;
+  return score;
+}
+
+// With nothing typed, this shows what you use most.
+function searchItems(query, book, exclude = []) {
+  const q = norm(query);
+  const skip = new Set(exclude.map(norm));
+  const usage = itemUsage();
+  const all = itemsFor(book).filter((i) => !skip.has(i.n));
+  if (!q) {
+    return all.filter((i) => usage.has(i.n) || i.custom)
+      .sort((a, b) => (usage.get(b.n) || 0) - (usage.get(a.n) || 0)).slice(0, 8);
+  }
+  const words = q.split(' ');
+  return all.map((item) => {
+    const base = scoreItem(item, q, words);
+    return { item, score: base ? base + Math.min(30, (usage.get(item.n) || 0) * 6) + (item.custom ? 10 : 0) : 0 };
+  }).filter((x) => x.score).sort((a, b) => (b.score - a.score) || (a.item.n.length - b.item.n.length)).slice(0, 25).map((x) => x.item);
+}
+
+function closeResults(box) {
+  box.hidden = true;
+  box.replaceChildren();
+}
+
+function showResults(box, query, book, opts) {
+  const list = searchItems(query, book, opts.exclude);
+  const nodes = [];
+  if (opts.selected) {
+    const head = el('div', 'result-head');
+    head.append(el('span', '', `${opts.selected} selected`));
+    const done = el('button', '', 'Done');
+    done.type = 'button';
+    done.addEventListener('click', () => { opts.input.blur(); closeResults(box); });
+    head.append(done);
+    nodes.push(head);
+  }
+  list.forEach((item) => {
+    const b = el('button', 'result', item.name);
+    b.type = 'button';
+    b.setAttribute('role', 'option');
+    b.append(el('small', '', [item.category, item.sub].filter(Boolean).join(', ') + (item.custom ? ', added by you' : '')));
+    b.addEventListener('click', () => opts.onPick(item));
+    nodes.push(b);
+  });
+  const typed = query.trim();
+  if (typed && !list.some((i) => i.n === norm(typed)) && !(opts.exclude || []).some((n) => norm(n) === norm(typed))) {
+    const b = el('button', 'result new', `Add "${typed}" as a new item`);
+    b.type = 'button';
+    b.append(el('small', '', 'Then choose its category and subcategory'));
+    b.addEventListener('click', () => openItemEdit(typed, book, opts.onPick));
+    nodes.push(b);
+  }
+  box.replaceChildren(...nodes);
+  box.hidden = !nodes.length;
+  box.scrollTop = 0;
+  fitResults(box);
+}
+
+// Keeps every result reachable above the on-screen keyboard.
+function fitResults(box) {
+  if (box.hidden || box.id !== 'pad-results') return;
+  const view = window.visualViewport;
+  const bottom = view ? view.offsetTop + view.height : innerHeight;
+  box.style.maxHeight = `${Math.max(110, Math.min(230, bottom - box.getBoundingClientRect().top - 8))}px`;
+}
+
+function wireItemSearch(input, box, getOpts) {
+  const refresh = () => {
+    const last = input.id === 'edit-item' ? input.value.split(',').pop() : input.value;
+    showResults(box, last, getOpts().book, { ...getOpts(), input });
+  };
+  if (input.id === 'pad-name') input.addEventListener('focus', refresh);
+  input.addEventListener('input', refresh);
+  input.addEventListener('blur', () => setTimeout(() => { if (document.activeElement !== input && !$('item-edit').open) closeResults(box); }, 150));
+  // Keep the keyboard open while tapping a result, so several can be chosen.
+  box.addEventListener('mousedown', (ev) => ev.preventDefault());
+  input.addEventListener('keydown', (ev) => {
+    if (ev.key === 'Escape') { closeResults(box); return; }
+    if (ev.key !== 'Enter') return;
+    ev.preventDefault();
+    if (input.value.trim()) {
+      const first = box.querySelector('.result');
+      if (first) first.click();
+    }
+  });
+  return refresh;
+}
+
+
+
+function pickDraftItem(item) {
+  if (!state.cart.some((l) => norm(l.name) === norm(item.name))) {
+    state.cart.push({ name: item.name, category: item.category || 'Other', sub: item.sub || '', price: '' });
+  }
+  state.target = state.cart.length - 1; // the keypad now fills this item's price
+  $('pad-name').value = '';
+  renderCartLines();
+  renderPad();
+  if (document.activeElement === $('pad-name')) padRefresh();
+  else closeResults($('pad-results'));
+}
+
+let padRefresh = () => {};
+let editRefresh = () => {};
+
+// Adds whichever category and subcategory a chosen item uses, so they appear for next time.
+async function ensureLists(book, category, sub) {
+  if (isStaff() || !category) return;
+  let cat = catObjs(book).find((c) => c.name.toLowerCase() === category.toLowerCase());
+  if (!cat) cat = await saveListItem({ kind: 'category', name: category, book });
+  if (sub && !liveList('subcategory').some((s) => s.parent === cat.id && s.name.toLowerCase() === sub.toLowerCase())) {
+    await saveListItem({ kind: 'subcategory', name: sub, book, parent: cat.id });
+  }
+}
+
+const catalogCats = (book) => [...new Set(catalogItems().filter((i) => i.book === book).map((i) => i.category))];
+const catalogSubs = (book, category) => [...new Set(catalogItems().filter((i) => i.book === book && i.category === category).map((i) => i.sub))];
+
+let itemDraft = null;
+
+function fillItemCats(book, current) {
+  const names = [...new Set([...catsFor(book), ...catalogCats(book)])];
+  const select = $('item-cat');
+  const options = names.map((n) => { const o = el('option', '', n); o.value = n; return o; });
+  const fresh = el('option', '', 'New category');
+  fresh.value = '__new';
+  select.replaceChildren(...options, fresh);
+  select.value = current && names.includes(current) ? current : names[0];
+  fillItemSubs(book);
+}
+
+function fillItemSubs(book, current = '') {
+  const category = $('item-cat').value;
+  const isNew = category === '__new';
+  $('item-newcat-field').hidden = !isNew;
+  const names = isNew ? [] : [...new Set([...subsFor(book, category), ...catalogSubs(book, category)])];
+  const none = el('option', '', 'None');
+  none.value = '';
+  const fresh = el('option', '', 'New subcategory');
+  fresh.value = '__new';
+  $('item-sub').replaceChildren(none, ...names.map((n) => { const o = el('option', '', n); o.value = n; return o; }), fresh);
+  $('item-sub').value = current;
+  $('item-newsub-field').hidden = true;
+}
+
+function openItemEdit(name, book, onPick) {
+  itemDraft = { book, onPick };
+  $('item-name').value = name.trim();
+  $('item-newcat').value = '';
+  $('item-newsub').value = '';
+  $('item-error').hidden = true;
+  fillItemCats(book, null);
+  $('item-edit').showModal();
+}
+
+async function submitItemEdit(ev) {
+  ev.preventDefault();
+  const fail = (m) => { $('item-error').textContent = m; $('item-error').hidden = false; };
+  const name = cleanListName($('item-name').value);
+  const newCat = cleanListName($('item-newcat').value);
+  const newSub = cleanListName($('item-newsub').value);
+  const category = $('item-cat').value === '__new' ? newCat : $('item-cat').value;
+  const sub = $('item-sub').value === '__new' ? newSub : $('item-sub').value;
+  if (!name) return fail('Enter the item name.');
+  if (!category) return fail('Enter the new category name.');
+  if ($('item-sub').value === '__new' && !sub) return fail('Enter the new subcategory name.');
+  if ([name, category, sub].some((v) => LONG_NUMBER.test(v))) return fail(NUMBER_WARNING);
+  const { book, onPick } = itemDraft;
+  const existing = itemsFor(book).find((i) => i.n === norm(name));
+  if (existing && existing.custom) return fail(`${name} is already in your items. Search for it and select it.`);
+  await saveListItem({ kind: 'item', name, book, type: category, linked: sub, owner: isStaff() ? state.config.person : '' });
+  await ensureLists(book, category, sub);
+  $('item-edit').close();
+  onPick({ name, book, category, sub, custom: true, n: norm(name), a: [], where: norm(`${category} ${sub}`) });
+  renderAll();
+  toast(`Added ${name}`);
 }
 
 function renderDate() {
@@ -810,61 +1137,69 @@ function renderDate() {
   document.querySelector('.date-chip').classList.toggle('other', !!state.date);
 }
 
-async function logExpense(category, subcategory = '') {
-  const value = amountValue();
-  if (!(value > 0)) return;
+async function logExpense() {
+  const { rows, total, problem } = buildRows();
+  if (problem) return;
   const now = Date.now();
-  const entry = {
+  const via = currentVia();
+  const orderId = rows.length > 1 ? newId() : '';
+  const date = state.date || isoDay();
+  const book = state.book;
+  const saved = rows.map((r, i) => ({
     id: newId(),
-    date: state.date || isoDay(),
-    amount: value,
-    book: state.book,
-    item: $('pad-name').value.trim(),
+    date,
+    amount: fromPaise(r.paise),
+    book,
+    item: r.item.slice(0, 240),
     receipt: '',
-    category,
-    via: currentVia() ? currentVia().name : '',
-    viaType: currentVia() ? currentVia().type : '',
-    viaLinked: (currentVia() && currentVia().linked) || '',
-    subcategory,
+    category: r.category,
+    via: via ? via.name : '',
+    viaType: via ? via.type : '',
+    viaLinked: (via && via.linked) || '',
+    subcategory: r.sub,
     labels: [],
-    note: '',
+    orderId,
+    note: r.note || '',
     person: state.config.person,
     deleted: false,
-    created: now,
+    created: now + i,
     updated: now,
     dirty: 1,
-  };
-  await saveLocal(entry);
+  }));
+  for (const entry of saved) await saveLocal(entry);
   const draft = state.draftFiles;
   clearDraft();
-  for (const file of draft) await queueFile(entry.id, file);
+  for (const r of rows) await ensureLists(book, r.category, r.sub);
+  for (const file of draft) await queueFile(saved[0].id, file);
   if (navigator.vibrate) navigator.vibrate(12);
-  state.amount = '';
-  state.pickedCat = null;
   renderAll();
-  // Office expenses usually need a name and receipt number, so ask straight away.
-  if (entry.book === 'Office' && !entry.item) {
-    openEdit(entry.id, true, true);
+  const first = saved[0];
+  // An Office expense with no name usually needs one, so ask straight away.
+  if (book === 'Office' && !first.item && saved.length === 1) {
+    openEdit(first.id, true, true);
   } else {
-    toast(`Saved ${money(value)}`, {
-      sub: [entry.item, subcategory ? `${category}: ${subcategory}` : category, entry.via, dayLabel(entry.date),
-        draft.length ? `${draft.length} ${draft.length === 1 ? 'file' : 'files'}` : ''].filter(Boolean).join(', '),
+    const what = saved.length > 1 ? `${saved.length} items` : [first.item, first.note, first.subcategory ? `${first.category}: ${first.subcategory}` : first.category].filter(Boolean).join(', ');
+    toast(`Saved ${money(fromPaise(total))}`, {
+      sub: [what, first.via, dayLabel(date), draft.length ? `${draft.length} ${draft.length === 1 ? 'file' : 'files'}` : '',
+        missingOf(first).length ? missingText(missingOf(first)) : ''].filter(Boolean).join(', '),
       saved: true,
-      undo: () => undoSaved(entry.id),
-      note: () => openEdit(entry.id, true, true),
+      undo: () => undoSaved(saved.map((e) => e.id)),
+      note: () => openEdit(first.id, true, true),
     });
   }
   syncNow();
 }
 
 // Undo means the expense was a mistake, so its files go too.
-async function undoSaved(id) {
-  for (const f of state.fileQueue.filter((x) => x.entryId === id)) await dropQueued(f.id);
-  const e = state.entries.find((x) => x.id === id);
-  for (const f of (e && e.files) || []) {
-    backendCall({ op: 'removeFile', entryId: id, fileId: f.id }).catch(() => {});
+async function undoSaved(ids) {
+  for (const id of ids) {
+    for (const f of state.fileQueue.filter((x) => x.entryId === id)) await dropQueued(f.id);
+    const e = state.entries.find((x) => x.id === id);
+    for (const f of (e && e.files) || []) {
+      backendCall({ op: 'removeFile', entryId: id, fileId: f.id }).catch(() => {});
+    }
+    await removeEntry(id, true);
   }
-  await removeEntry(id, true);
 }
 
 async function removeEntry(id, quiet) {
@@ -877,6 +1212,24 @@ async function removeEntry(id, quiet) {
   } else {
     toast('Removed');
   }
+  syncNow();
+}
+
+async function removeOrder(orderId) {
+  const lines = live().filter((e) => e.orderId === orderId);
+  const stamp = Date.now();
+  for (const e of lines) await saveLocal({ ...e, deleted: true, updated: Math.max(stamp, e.updated + 1), dirty: 1 });
+  renderAll();
+  toast(`Deleted order of ${lines.length} items`, {
+    undo: async () => {
+      for (const e of lines) {
+        const cur = state.entries.find((x) => x.id === e.id);
+        await saveLocal({ ...cur, deleted: false, updated: Math.max(Date.now(), cur.updated + 1), dirty: 1 });
+      }
+      renderAll();
+      syncNow();
+    },
+  });
   syncNow();
 }
 
@@ -932,7 +1285,370 @@ function renderMonthNavs() {
   document.querySelectorAll('.month-next').forEach((b) => { b.disabled = state.month >= isoMonth(); });
 }
 
+/* ---------- Dues ---------- */
+
+function dueData(l) {
+  let d = {};
+  try { d = JSON.parse(l.details) || {}; } catch (err) { /* treated as empty */ }
+  return { amount: Number(d.amount) || 0, varies: !!d.varies, every: Number(d.every) || 0, day: Number(d.day) || 1,
+    next: d.next || '', total: Number(d.total) || 0, paid: Number(d.paid) || 0, via: d.via || '', note: d.note || '' };
+}
+
+// Moves by whole months and keeps the chosen day, so the 31st becomes the 28th in February and returns to the 31st.
+function addMonths(iso, months, day) {
+  const [y, m] = iso.split('-').map(Number);
+  const first = new Date(y, m - 1 + months, 1);
+  const last = new Date(first.getFullYear(), first.getMonth() + 1, 0).getDate();
+  return isoDay(new Date(first.getFullYear(), first.getMonth(), Math.min(day, last)));
+}
+
+function afterPayment(d) {
+  const paid = d.paid + 1;
+  const finished = !d.every || (d.total && paid >= d.total);
+  return { ...d, paid, next: finished ? '' : addMonths(d.next, d.every, d.day) };
+}
+
+const repeatLabel = (d) => (!d.every ? 'One time' : d.every === 1 ? 'Monthly' : d.every === 12 ? 'Yearly' : `Every ${d.every} months`);
+const daysUntil = (iso) => Math.round((parseDay(iso) - parseDay(isoDay())) / 86400000);
+
+function dueWhen(d) {
+  const n = daysUntil(d.next);
+  const date = parseDay(d.next).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: n > 300 ? 'numeric' : undefined });
+  if (n < -1) return `Overdue by ${-n} days, was due ${date}`;
+  if (n === -1) return `Overdue by 1 day, was due ${date}`;
+  if (n === 0) return 'Due today';
+  if (n === 1) return 'Due tomorrow';
+  if (n <= 7) return `Due in ${n} days, ${date}`;
+  return `Due ${date}`;
+}
+
+async function saveDue(fields, data, base) {
+  return saveListItem({ kind: 'due', ...fields, details: JSON.stringify(data) }, base);
+}
+
+function renderDues() {
+  const dues = liveList('due').map((l) => ({ l, d: dueData(l) }));
+  const active = dues.filter((x) => x.d.next).sort((a, b) => a.d.next.localeCompare(b.d.next));
+  const overdue = active.filter((x) => daysUntil(x.d.next) < 0);
+  const soon = active.filter((x) => { const n = daysUntil(x.d.next); return n >= 0 && n <= 7; });
+  const later = active.filter((x) => daysUntil(x.d.next) > 7);
+  const done = dues.filter((x) => !x.d.next);
+  const attention = overdue.length + soon.length;
+  const count = $('dues-count');
+  count.hidden = !attention;
+  count.textContent = String(attention);
+  count.setAttribute('aria-label', `${attention} due soon or overdue`);
+
+  const line = $('dues-total');
+  const fixed = [...overdue, ...soon].filter((x) => !x.d.varies).reduce((t, x) => t + toPaise(x.d.amount), 0);
+  line.hidden = !fixed;
+  line.textContent = fixed ? `${money(fromPaise(fixed))} due in the next 7 days, including anything overdue` : '';
+
+  const rowFor = ({ l, d }, state_) => {
+    const row = el('div', `due-row ${state_}`);
+    const main = el('button', 'due-main');
+    main.type = 'button';
+    main.setAttribute('aria-label', `Edit ${l.name}`);
+    main.addEventListener('click', () => openDueEdit(l));
+    main.append(el('span', 'due-name', l.name), el('span', 'due-amount', d.varies ? 'Varies' : money(d.amount)));
+    const bits = [d.note, d.next ? dueWhen(d) : 'Finished', d.next ? repeatLabel(d) : '', d.total ? `${d.paid} of ${d.total} paid` : '', d.via, l.book === 'Office' ? 'Office' : ''];
+    main.append(el('span', 'due-when', bits.filter(Boolean).join(', ')));
+    row.append(main);
+    if (d.next) {
+      const actions = el('div', 'due-actions');
+      const pay = el('button', 'due-pay', 'Mark paid');
+      pay.type = 'button';
+      pay.setAttribute('aria-label', `Mark ${l.name} paid`);
+      pay.addEventListener('click', () => openDuePay(l));
+      actions.append(pay);
+      if (d.every) {
+        const skip = el('button', 'due-skip', 'Skip');
+        skip.type = 'button';
+        skip.setAttribute('aria-label', `Skip this ${l.name}`);
+        skip.addEventListener('click', () => skipDue(l));
+        actions.append(skip);
+      }
+      row.append(actions);
+    }
+    return row;
+  };
+  const group = (title, items, cls) => {
+    if (!items.length) return [];
+    return [el('div', `due-group ${cls}`, `${title} (${items.length})`), ...items.map((x) => rowFor(x, cls))];
+  };
+  const nodes = [...group('Overdue', overdue, 'overdue'), ...group('Due soon', soon, 'soon'), ...group('Later', later, 'later'), ...group('Finished', done, 'done')];
+  $('dues-list').replaceChildren(...(nodes.length ? nodes
+    : [el('div', 'empty-state', 'No dues yet. Add your rent, EMIs, and regular bills to see what is coming up.')]));
+}
+
+let dueDraft = null;
+
+function fillDueCats(current, sub) {
+  const book = $('due-book').value;
+  const names = [...new Set([...catsFor(book), ...catalogCats(book)])];
+  fillSelect($('due-cat'), names, current && (names.includes(current) || current) ? current : names[0]);
+  fillDueSubs(sub);
+}
+
+function fillDueSubs(current) {
+  const book = $('due-book').value;
+  const category = $('due-cat').value;
+  const names = [...new Set([...subsFor(book, category), ...catalogSubs(book, category)])];
+  if (current && !names.includes(current)) names.push(current);
+  const none = el('option', '', 'None');
+  none.value = '';
+  $('due-sub').replaceChildren(none, ...names.map((n) => { const o = el('option', '', n); o.value = n; return o; }));
+  $('due-sub').value = current || '';
+  $('due-sub-field').hidden = !names.length;
+}
+
+function syncDueFields() {
+  $('due-amount').disabled = $('due-varies').checked;
+  if ($('due-varies').checked) $('due-amount').value = '';
+  $('due-emi').hidden = $('due-every').value === '0';
+}
+
+function openDueEdit(l) {
+  dueDraft = l || null;
+  const d = l ? dueData(l) : { every: 1, next: isoDay(), total: 0, paid: 0, amount: 0, varies: false, via: '' };
+  $('due-title').textContent = l ? 'Edit due' : 'Add a due';
+  $('due-name').value = l ? l.name : '';
+  $('due-amount').value = d.amount ? String(d.amount) : '';
+  $('due-varies').checked = d.varies;
+  $('due-date').value = d.next || isoDay();
+  $('due-every').value = String(d.every);
+  $('due-total').value = d.total ? String(d.total) : '';
+  $('due-paid').value = d.paid ? String(d.paid) : '';
+  $('due-note').value = d.note || '';
+  fillSelect($('due-book'), BOOKS, l ? l.book : state.book);
+  fillVia(d.via, $('due-via'));
+  fillDueCats(l ? l.type : 'Bills', l ? l.linked : '');
+  syncDueFields();
+  $('due-delete').hidden = !l;
+  $('due-error').hidden = true;
+  closeResults($('due-results'));
+  $('due-edit').showModal();
+  if (!l) $('due-name').focus();
+}
+
+async function submitDue(ev) {
+  ev.preventDefault();
+  const fail = (m) => { $('due-error').textContent = m; $('due-error').hidden = false; };
+  const name = cleanListName($('due-name').value);
+  const varies = $('due-varies').checked;
+  const amount = varies ? 0 : Math.round(parseFloat($('due-amount').value.replace(/[,₹\s]/g, '')) * 100) / 100;
+  const next = $('due-date').value;
+  const every = Number($('due-every').value);
+  const total = every ? (parseInt($('due-total').value, 10) || 0) : 0;
+  const paid = every ? (parseInt($('due-paid').value, 10) || 0) : 0;
+  if (!name) return fail('Enter what this due is for.');
+  if (LONG_NUMBER.test(name)) return fail(NUMBER_WARNING);
+  if (!varies && !(amount > 0)) return fail('Enter the amount, or tick that it changes each time.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(next)) return fail('Choose the next due date.');
+  if (total && paid >= total) return fail('Already paid must be less than total payments.');
+  const old = dueDraft ? dueData(dueDraft) : null;
+  const sameDate = old && old.next === next;
+  const data = { amount, varies, every, day: sameDate ? old.day : Number(next.slice(8)), next, total, paid, via: $('due-via').value, note: $('due-note').value.trim() };
+  await saveDue({ name, book: $('due-book').value, type: $('due-cat').value, linked: $('due-sub').value }, data, dueDraft || undefined);
+  $('due-edit').close();
+  renderAll();
+  toast(`Saved ${name}`);
+}
+
+let payingDue = null;
+
+function openDuePay(l) {
+  payingDue = l;
+  const d = dueData(l);
+  $('pay-title').textContent = `Pay ${l.name}`;
+  $('pay-progress').textContent = [dueWhen(d), d.total ? `Payment ${d.paid + 1} of ${d.total}` : ''].filter(Boolean).join('. ');
+  $('pay-amount').value = d.amount ? String(d.amount) : '';
+  $('pay-date').value = isoDay();
+  $('pay-date').max = isoDay();
+  $('pay-note').value = d.note;
+  fillVia(d.via, $('pay-via'));
+  $('pay-error').hidden = true;
+  $('due-pay').showModal();
+  if (!d.amount) $('pay-amount').focus();
+}
+
+async function submitPay(ev) {
+  ev.preventDefault();
+  const fail = (m) => { $('pay-error').textContent = m; $('pay-error').hidden = false; };
+  const amount = Math.round(parseFloat($('pay-amount').value.replace(/[,₹\s]/g, '')) * 100) / 100;
+  const date = $('pay-date').value;
+  if (!(amount > 0)) return fail('Enter the amount paid.');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(date)) return fail('Choose the date paid.');
+  const l = payingDue;
+  const d = dueData(l);
+  const via = instruments().find((i) => i.name === $('pay-via').value);
+  const now = Date.now();
+  const entry = {
+    id: newId(), date, amount, book: l.book, item: l.name, receipt: '', category: l.type || 'Bills',
+    via: via ? via.name : $('pay-via').value, viaType: via ? via.type : '', viaLinked: (via && via.linked) || '',
+    subcategory: l.linked || '', labels: [], orderId: '', note: $('pay-note').value.trim(), person: state.config.person,
+    deleted: false, created: now, updated: now, dirty: 1,
+  };
+  await saveLocal(entry);
+  await ensureLists(entry.book, entry.category, entry.subcategory);
+  const before = state.lists.find((x) => x.id === l.id);
+  const moved = await saveDue({}, afterPayment(d), before);
+  $('due-pay').close();
+  renderAll();
+  toast(`Saved ${money(amount)}`, {
+    sub: [l.name, entry.note, entry.via, moved && dueData(moved).next ? `Next due ${parseDay(dueData(moved).next).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}` : 'Finished'].filter(Boolean).join(', '),
+    saved: true,
+    undo: async () => {
+      await removeEntry(entry.id, true);
+      const cur = state.lists.find((x) => x.id === l.id);
+      await saveDue({}, d, cur);
+      renderAll();
+    },
+    note: () => openEdit(entry.id, true, true),
+  });
+  syncNow();
+}
+
+async function skipDue(l) {
+  const d = dueData(l);
+  const next = addMonths(d.next, d.every, d.day);
+  await saveDue({}, { ...d, next }, state.lists.find((x) => x.id === l.id));
+  renderAll();
+  toast(`Skipped. Next due ${parseDay(next).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })}`, {
+    undo: async () => {
+      await saveDue({}, d, state.lists.find((x) => x.id === l.id));
+      renderAll();
+    },
+  });
+}
+
+function loadReminders() {
+  const rule = liveList('rule').find((r) => r.book === 'Reminders');
+  let s = {};
+  try { s = rule ? JSON.parse(rule.details) : {}; } catch (err) { /* empty */ }
+  $('rem-emails').value = s.emails || '';
+  $('rem-days').value = String(s.days || 3);
+  $('rem-error').hidden = true;
+}
+
+async function saveReminders() {
+  const emails = $('rem-emails').value.split(',').map((e) => e.trim()).filter(Boolean);
+  if (emails.some((e) => !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(e))) {
+    $('rem-error').textContent = 'Check the email addresses, and separate them with commas.';
+    $('rem-error').hidden = false;
+    return false;
+  }
+  $('rem-error').hidden = true;
+  const base = liveList('rule').find((r) => r.book === 'Reminders');
+  await saveListItem({ kind: 'rule', name: 'Reminders', book: 'Reminders', details: JSON.stringify({ emails: emails.join(', '), days: Number($('rem-days').value) }) }, base);
+  return true;
+}
+
+/* ---------- Required details ---------- */
+
+function ruleFor(book) {
+  return liveList('rule').find((r) => r.book === book);
+}
+
+function requiredFor(book) {
+  const rule = ruleFor(book);
+  return rule ? rule.linked.split(',').filter(Boolean) : (REQUIRED_DEFAULTS[book] || []);
+}
+
+// Invoice and receipt belong to the whole order, so one on any line is enough.
+function orderLines(e) {
+  return e.orderId ? live().filter((x) => x.orderId === e.orderId) : [e];
+}
+
+function missingOf(e) {
+  const need = requiredFor(bookOf(e));
+  const lines = orderLines(e);
+  const out = [];
+  if (need.includes('invoice') && !lines.some((x) => (x.files || []).length || state.fileQueue.some((f) => f.entryId === x.id))) out.push('invoice');
+  if (need.includes('receipt') && !lines.some((x) => x.receipt)) out.push('receipt');
+  if (need.includes('via') && !e.via) out.push('via');
+  if (need.includes('date') && !/^\d{4}-\d{2}-\d{2}$/.test(e.date || '')) out.push('date');
+  if (need.includes('name') && !e.item) out.push('name');
+  return out;
+}
+
+const missingText = (fields) => `Missing ${fields.map((f) => REQUIRED_FIELDS[f]).join(', ')}`;
+
+function flaggedEntries() {
+  return inBook().filter((e) => (state.filter === 'all' || e.person === state.filter) && missingOf(e).length)
+    .sort((a, b) => (b.date || '').localeCompare(a.date || '') || (b.created - a.created));
+}
+
+// An order counts once, however many of its lines are affected.
+function countFlagged(list) {
+  return new Set(list.map((e) => e.orderId || e.id)).size;
+}
+
+function renderNeeds() {
+  const flagged = flaggedEntries();
+  const box = $('needs-filter');
+  const count = $('tab-count');
+  const total = countFlagged(inBook().filter((e) => missingOf(e).length));
+  count.hidden = !total;
+  count.textContent = String(total);
+  count.setAttribute('aria-label', `${total} need details`);
+  if (state.needs && state.needs !== 'all' && !flagged.some((e) => missingOf(e).includes(state.needs))) state.needs = flagged.length ? 'all' : null;
+  if (state.needs === 'all' && !flagged.length) state.needs = null;
+  const chip = (value, text) => {
+    const b = el('button', '', text);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(state.needs === value));
+    b.addEventListener('click', () => { state.needs = state.needs === value ? null : value; renderHistory(); });
+    return b;
+  };
+  const nodes = [];
+  if (flagged.length) nodes.push(chip('all', `Needs details (${countFlagged(flagged)})`));
+  if (state.needs) {
+    Object.keys(REQUIRED_FIELDS).forEach((f) => {
+      const n = countFlagged(flagged.filter((e) => missingOf(e).includes(f)));
+      if (n) nodes.push(chip(f, `${REQUIRED_LABELS[f]} (${n})`));
+    });
+  }
+  box.replaceChildren(...nodes);
+  $('history-months').hidden = !!state.needs;
+}
+
+function renderRules() {
+  const need = requiredFor(state.book);
+  const rows = Object.keys(REQUIRED_FIELDS).map((f) => {
+    const label = el('label', 'rule-row');
+    const box = el('input');
+    box.type = 'checkbox';
+    box.checked = need.includes(f);
+    box.dataset.field = f;
+    box.addEventListener('change', async () => {
+      const chosen = [...document.querySelectorAll('#m-rules-body input')].filter((c) => c.checked).map((c) => c.dataset.field);
+      await saveListItem({ kind: 'rule', name: `Required in ${state.book}`, book: state.book, linked: chosen.join(',') }, ruleFor(state.book));
+      renderAll();
+    });
+    label.append(box, document.createTextNode(REQUIRED_LABELS[f]));
+    return label;
+  });
+  $('m-rules-body').replaceChildren(el('p', 'note', `Expenses in ${state.book} missing any of these are flagged. Applies to everyone using this book.`), ...rows);
+}
+
+function renderEditMissing() {
+  const e = state.entries.find((x) => x.id === editingId);
+  if (!e || !$('edit').open) return;
+  const fields = missingOf(e);
+  $('edit-missing').hidden = !fields.length;
+  $('edit-missing').textContent = fields.length ? missingText(fields) : '';
+  $('edit-via-field').classList.toggle('is-missing', fields.includes('via'));
+  $('edit-receipt-field').classList.toggle('is-missing', fields.includes('receipt'));
+  $('edit-date-field').classList.toggle('is-missing', fields.includes('date'));
+  document.querySelector('.files-box').classList.toggle('is-missing', fields.includes('invoice'));
+  $('edit-item').parentElement.classList.toggle('is-missing', fields.includes('name'));
+  const next = state.needs && flaggedEntries().some((x) => x.id !== e.id && (x.orderId !== e.orderId || !e.orderId));
+  $('edit-next').hidden = !next;
+}
+
 function renderHistory() {
+  renderNeeds();
   const people = peopleList();
   const filter = $('person-filter');
   if (people.length > 1) {
@@ -949,9 +1665,11 @@ function renderHistory() {
     state.filter = 'all';
   }
 
-  const rows = monthEntries(state.month)
-    .filter((e) => state.filter === 'all' || e.person === state.filter)
-    .sort((a, b) => (b.date.localeCompare(a.date)) || (b.created - a.created));
+  const rows = state.needs
+    ? flaggedEntries().filter((e) => state.needs === 'all' || missingOf(e).includes(state.needs))
+    : monthEntries(state.month)
+      .filter((e) => state.filter === 'all' || e.person === state.filter)
+      .sort((a, b) => (b.date.localeCompare(a.date)) || (b.created - a.created));
 
   const list = $('history-list');
   if (!rows.length) {
@@ -961,7 +1679,25 @@ function renderHistory() {
   }
   const out = [];
   let day = null;
+  let orderShown = null;
+  let pendingHead = null;
   for (const e of rows) {
+    if (e.orderId && e.orderId !== orderShown) {
+      orderShown = e.orderId;
+      const lines = rows.filter((x) => x.orderId === e.orderId);
+      if (lines.length > 1) {
+        const head = el('div', 'order-head');
+        head.append(el('span', '', `Order of ${lines.length} items`), el('span', '', money(fromPaise(lines.reduce((t, x) => t + toPaise(x.amount), 0)))));
+        const shared = missingOf(e).filter((f) => f === 'invoice' || f === 'receipt');
+        if (shared.length) {
+          head.classList.add('flagged');
+          head.append(el('span', 'order-missing', missingText(shared)));
+        }
+        pendingHead = head;
+      }
+    } else if (!e.orderId) {
+      orderShown = null;
+    }
     if (e.date !== day) {
       day = e.date;
       const sum = rows.filter((x) => x.date === day).reduce((s, x) => s + toPaise(x.amount), 0);
@@ -969,19 +1705,26 @@ function renderHistory() {
       head.append(el('span', '', dayLabel(day)), el('span', '', money(fromPaise(sum))));
       out.push(head);
     }
-    const row = el('button', 'row');
+    if (pendingHead) { out.push(pendingHead); pendingHead = null; }
+    const inOrder = e.orderId && rows.filter((x) => x.orderId === e.orderId).length > 1;
+    const row = el('button', inOrder ? 'row in-order' : 'row');
     row.type = 'button';
     row.setAttribute('aria-label', `Edit ${money(e.amount)}, ${e.category}`);
     const main = el('span', 'row-main');
     main.append(el('span', 'row-cat', e.item || e.category));
     const fileCount = (e.files || []).length + state.fileQueue.filter((f) => f.entryId === e.id).length;
     const place = e.item ? [e.category, e.subcategory] : [e.subcategory];
-    const bits = [...place, (e.labels || []).join(', '), e.receipt ? `Receipt ${e.receipt}` : '', e.note, e.person, e.via,
+    const bits = [e.note, ...place, (e.labels || []).join(', '), e.receipt ? `Receipt ${e.receipt}` : '', e.person, e.via,
       fileCount ? `${fileCount} ${fileCount === 1 ? 'file' : 'files'}` : '']
       .filter(Boolean).join(', ');
     if (bits) main.append(el('span', 'row-sub', bits));
     const amt = el('span', 'row-amt', money(e.amount));
     if (e.dirty) amt.append(el('span', 'row-wait', 'Not synced yet'));
+    const lacking = missingOf(e).filter((f) => !inOrder || (f !== 'invoice' && f !== 'receipt'));
+    if (lacking.length) {
+      row.classList.add('flagged');
+      main.append(el('span', 'row-missing', missingText(lacking)));
+    }
     row.append(main, amt);
     row.addEventListener('click', () => openEdit(e.id));
     out.push(row);
@@ -1101,7 +1844,10 @@ function openEdit(id, focusDetails, justSaved) {
   fillSelect($('edit-book'), BOOKS, bookOf(e));
   fillSelect($('edit-category'), catsFor(bookOf(e)), e.category);
   $('edit-item').value = e.item || '';
+  closeResults($('edit-results'));
   $('edit-receipt').value = e.receipt || '';
+  $('edit-more').open = !!(justSaved || e.receipt || e.note || (e.labels || []).length || missingOf(e).includes('receipt'));
+  $('edit-delete-order').hidden = !(e.orderId && live().filter((x) => x.orderId === e.orderId).length > 1);
   $('edit-title').textContent = justSaved ? `Saved ${money(e.amount)}. Add details` : 'Edit expense';
   $('edit-cancel').textContent = justSaved ? 'Skip' : 'Cancel';
   fillVia(e.via);
@@ -1115,11 +1861,11 @@ function openEdit(id, focusDetails, justSaved) {
   $('edit-error').hidden = true;
   $('edit').showModal();
   renderEditFiles();
+  renderEditMissing();
   if (focusDetails) $('edit-item').focus();
 }
 
-function fillVia(current) {
-  const select = $('edit-via');
+function fillVia(current, select = $('edit-via')) {
   const list = instruments();
   const groups = groupByType(list).map(([type, items]) => {
     const g = el('optgroup');
@@ -1200,7 +1946,7 @@ let listDraft = null;
 function openListEdit(kind, item, extra = {}) {
   listDraft = { kind, item, extra };
   const isPay = kind === 'instrument';
-  const titles = { category: 'category', subcategory: 'subcategory', label: 'label', instrument: 'payment method' };
+  const titles = { category: 'category', subcategory: 'subcategory', label: 'label', instrument: 'payment method', item: 'item' };
   $('list-title').textContent = `${item ? 'Edit' : 'Add'} ${titles[kind]}`;
   $('list-name').value = item ? item.name : '';
   $('list-name').placeholder = '';
@@ -1309,6 +2055,14 @@ function addButton(text, fn, cls = 'plain m-add') {
 }
 
 function renderManage() {
+  renderRules();
+  const myItems = liveList('item').filter((i) => i.book === state.book && (!isStaff() || i.owner === state.config.person));
+  $('m-items-body').replaceChildren(
+    myItems.length
+      ? el('p', 'note', `Items you added to ${state.book}. To add one, search for it on the Add screen.`)
+      : el('p', 'note', `No added items in ${state.book} yet. To add one, search for it on the Add screen and choose Add as a new item.`),
+    ...myItems.map((i) => manageRow(i, '', [i.type, i.linked].filter(Boolean).join(', '))),
+  );
   const cats = $('m-cats-body');
   const catNodes = [el('p', 'note', `Showing ${state.book}. Use the Home or Office switch on the Add screen to change book.`)];
   catObjs(state.book).forEach((c) => {
@@ -1412,31 +2166,55 @@ async function submitPerson(ev) {
 
 function openViaPicker() {
   const now = currentVia() || {};
-  const nodes = [];
-  groupByType(minePay()).forEach(([type, items]) => {
-    nodes.push(el('p', 'via-group', type));
-    items.forEach((i) => {
-      const b = el('button', 'via-option', i.name);
-      b.type = 'button';
-      b.setAttribute('aria-pressed', String(i.id === now.id));
-      const mine = defaultFor(type);
-      const line = [mine && mine.id === i.id ? 'Default' : '', i.linked, i.owner].filter(Boolean).join(', ');
-      if (line) b.append(el('small', '', line));
-      b.addEventListener('click', () => {
-        state.viaByBook[state.book] = i.id;
-        db.setMeta('viaByBook', state.viaByBook);
-        $('via-picker').close();
-        renderCats();
-      });
-      nodes.push(b);
-    });
+  const choose = (i) => {
+    state.viaByBook[state.book] = i.id;
+    db.setMeta('viaByBook', state.viaByBook);
+    $('via-picker').close();
+    renderCats();
+  };
+  const option = (i) => {
+    const b = el('button', 'via-option', i.name);
+    b.type = 'button';
+    b.setAttribute('aria-pressed', String(i.id === now.id));
+    const line = [i.linked, i.owner].filter(Boolean).join(', ');
+    if (line) b.append(el('small', '', line));
+    b.addEventListener('click', () => choose(i));
+    return b;
+  };
+  const mine = minePay();
+  const me = state.config ? state.config.person : '';
+  const recent = [];
+  [...state.entries].sort((a, b) => b.created - a.created).forEach((e) => {
+    if (e.deleted || e.person !== me || recent.length >= 3) return;
+    const i = mine.find((m) => m.name === e.via);
+    if (i && !recent.includes(i)) recent.push(i);
   });
+  const nodes = [];
+  if (recent.length) nodes.push(el('p', 'via-group', 'Recent'), ...recent.map(option));
+  groupByType(mine).forEach(([type, items]) => {
+    // Each method appears once: anything under Recent is left out here.
+    const rest = items.filter((i) => !recent.includes(i));
+    if (!rest.length) return;
+    const top = rest.find((i) => i.id === defaultFor(type).id) || rest[0];
+    const others = rest.filter((i) => i.id !== top.id);
+    nodes.push(el('p', 'via-group', type), option(top));
+    if (others.length) {
+      const more = el('button', 'via-more', `${others.length} more`);
+      more.type = 'button';
+      more.setAttribute('aria-label', `Show ${others.length} more under ${type}`);
+      more.addEventListener('click', () => more.replaceWith(...others.map(option)));
+      nodes.push(more);
+    }
+  });
+  if (!mine.length) nodes.push(el('p', 'note', 'Add a payment method to choose it here.'));
   $('via-list').replaceChildren(...nodes);
   $('via-picker').showModal();
 }
 
 async function submitEdit(ev) {
   ev.preventDefault();
+  const goNext = !!(ev.submitter && ev.submitter.id === 'edit-next') || state.editNext;
+  state.editNext = false;
   const e = state.entries.find((x) => x.id === editingId);
   if (!e) { $('edit').close(); return; }
   const amount = Math.round(parseFloat($('edit-amount').value.replace(/[,₹\s]/g, '')) * 100) / 100;
@@ -1465,6 +2243,10 @@ async function submitEdit(ev) {
   renderAll();
   toast('Changes saved');
   syncNow();
+  if (goNext) {
+    const upcoming = flaggedEntries().find((x) => x.id !== next.id && !(next.orderId && x.orderId === next.orderId));
+    if (upcoming) { $('toast').hidden = true; openEdit(upcoming.id); }
+  }
 }
 
 function showEditError(msg) {
@@ -1490,11 +2272,14 @@ function renderAll() {
   renderCats();
   renderDate();
   renderEditFiles();
+  renderEditMissing();
+  renderDues();
   renderManage();
   if (state.config) $('set-name').textContent = state.config.person;
 }
 
 function go(view) {
+  if (view !== state.view) $('toast').hidden = true; // never left covering the next screen
   state.view = view;
   document.body.dataset.view = view;
   document.querySelectorAll('[data-go]').forEach((b) => {
@@ -1663,10 +2448,8 @@ function renderLock(message) {
 
 function showLock(mode, changing = false) {
   closeViewer();
-  ['edit', 'confirm', 'via-picker', 'list-edit', 'person-edit', 'person-code', 'accounts'].forEach((id) => { if ($(id).open) $(id).close(); });
+  ['edit', 'confirm', 'via-picker', 'list-edit', 'person-edit', 'person-code', 'accounts', 'item-edit', 'cat-picker', 'due-edit', 'due-pay'].forEach((id) => { if ($(id).open) $(id).close(); });
   $('toast').hidden = true;
-  state.amount = '';
-  state.pickedCat = null;
   clearDraft();
   renderCats();
   pinState.mode = mode;
@@ -1852,6 +2635,78 @@ function wire_() {
     try { localStorage.setItem('kharcha-theme', b.dataset.choice); } catch (err) { /* lasts until reload */ }
     applyTheme(b.dataset.choice);
   }));
+  padRefresh = wireItemSearch($('pad-name'), $('pad-results'), () => ({
+    book: state.book,
+    exclude: state.cart.map((i) => i.name),
+    selected: state.cart.length,
+    onPick: pickDraftItem,
+  }));
+  editRefresh = wireItemSearch($('edit-item'), $('edit-results'), () => ({
+    book: $('edit-book').value,
+    onPick: (item) => {
+      // The field can hold several names; the search works on the last one.
+      const before = $('edit-item').value.split(',').map((s) => s.trim()).filter(Boolean).slice(0, -1);
+      const typedOnly = !$('edit-item').value.includes(',');
+      $('edit-item').value = [...before, item.name].join(', ');
+      if (typedOnly && item.category) {
+        const list = catsFor($('edit-book').value);
+        fillSelect($('edit-category'), list, item.category);
+        fillSubs(item.sub || '');
+        ensureLists($('edit-book').value, item.category, item.sub);
+      }
+      closeResults($('edit-results'));
+    },
+  }));
+  if (window.visualViewport) window.visualViewport.addEventListener('resize', () => fitResults($('pad-results')));
+  // Tapping anywhere else closes the results, so they never cover what was tapped.
+  document.addEventListener('pointerdown', (ev) => {
+    if (!ev.target.closest('#pad-results, #pad-name, #item-edit')) closeResults($('pad-results'));
+  });
+  wireItemSearch($('due-name'), $('due-results'), () => ({
+    book: $('due-book').value,
+    onPick: (item) => {
+      $('due-name').value = item.name;
+      fillDueCats(item.category || 'Other', item.sub || '');
+      closeResults($('due-results'));
+    },
+  }));
+  $('due-add').addEventListener('click', () => openDueEdit(null));
+  $('due-form').addEventListener('submit', submitDue);
+  $('due-cancel').addEventListener('click', () => $('due-edit').close());
+  $('due-delete').addEventListener('click', () => {
+    const l = dueDraft;
+    $('due-edit').close();
+    removeListItem(state.lists.find((x) => x.id === l.id));
+  });
+  $('due-varies').addEventListener('change', syncDueFields);
+  $('due-every').addEventListener('change', syncDueFields);
+  $('due-book').addEventListener('change', () => fillDueCats($('due-cat').value, ''));
+  $('due-cat').addEventListener('change', () => fillDueSubs(''));
+  $('pay-form').addEventListener('submit', submitPay);
+  $('pay-cancel').addEventListener('click', () => $('due-pay').close());
+  $('m-reminders').addEventListener('toggle', () => { if ($('m-reminders').open) loadReminders(); });
+  $('rem-form').addEventListener('submit', async (ev) => {
+    ev.preventDefault();
+    if (await saveReminders()) toast('Reminders saved');
+  });
+  $('rem-test').addEventListener('click', async () => {
+    if (!(await saveReminders())) return;
+    try {
+      // The address must reach the Sheet before the test can use it.
+      for (let i = 0; i < 100 && (state.sync.busy || state.lists.some((l) => l.dirty)); i++) {
+        if (!state.sync.busy) await syncNow();
+        else await new Promise((r) => setTimeout(r, 200));
+      }
+      await backendCall({ op: 'testReminder' });
+      toast('Test email sent');
+    } catch (err) {
+      toast(err.code === 'no_reminder_address' ? 'Enter an email address first.' : 'Sending needs an internet connection and the latest backend.');
+    }
+  });
+  $('item-form').addEventListener('submit', submitItemEdit);
+  $('item-cancel').addEventListener('click', () => $('item-edit').close());
+  $('item-cat').addEventListener('change', () => fillItemSubs(itemDraft.book));
+  $('item-sub').addEventListener('change', () => { $('item-newsub-field').hidden = $('item-sub').value !== '__new'; });
   $('btn-accounts').addEventListener('click', openAccounts);
   $('pin-accounts').addEventListener('click', openAccounts);
   $('accounts-add').addEventListener('click', addProfile);
@@ -1862,7 +2717,28 @@ function wire_() {
     await device.set('active', state.profiles[0].id);
     location.reload();
   });
-  ['pad-photo', 'pad-file'].forEach((id) => {
+  $('via-cell').addEventListener('click', () => {
+    if (currentVia()) openViaPicker();
+    else { go('settings'); $('m-pay').open = true; }
+  });
+  $('cat-close').addEventListener('click', () => $('cat-picker').close());
+  $('save').addEventListener('click', logExpense);
+  $('total-row').addEventListener('click', () => {
+    state.target = null;
+    if (!state.amount) state.amount = '';
+    renderCartLines();
+    renderPad();
+  });
+  $('edit-next').addEventListener('click', () => {
+    state.editNext = true;
+    $('edit-form').requestSubmit();
+  });
+  $('edit-delete-order').addEventListener('click', () => {
+    const e = state.entries.find((x) => x.id === editingId);
+    $('edit').close();
+    if (e) removeOrder(e.orderId);
+  });
+  ['pad-file'].forEach((id) => {
     $(id).addEventListener('change', async (ev) => {
       const files = [...ev.target.files];
       ev.target.value = '';
@@ -1878,7 +2754,7 @@ function wire_() {
   $('list-form').addEventListener('submit', submitListEdit);
   $('list-cancel').addEventListener('click', () => $('list-edit').close());
 
-  ['pick-file', 'pick-photo'].forEach((id) => {
+  ['pick-file'].forEach((id) => {
     $(id).addEventListener('change', async (ev) => {
       const files = [...ev.target.files];
       ev.target.value = '';

@@ -48,7 +48,8 @@
   <nav class="tabs" aria-label="Main">
     <span class="wordmark">Kharcha</span>
     <button type="button" data-go="add" class="only-phone">Add</button>
-    <button type="button" data-go="history">History</button>
+    <button type="button" data-go="history">Expenses<span id="tab-count" class="tab-count" hidden></span></button>
+    <button type="button" data-go="dues">Dues<span id="dues-count" class="tab-count" hidden></span></button>
     <button type="button" data-go="summary">Summary</button>
     <button type="button" data-go="settings">Settings</button>
   </nav>
@@ -57,56 +58,77 @@
     <section id="view-add" class="view view-add" aria-label="Add an expense">
       <header class="page-top">
         <div class="book-switch" role="group" aria-label="Book"></div>
-        <button type="button" id="sync-status" class="sync" aria-live="polite">Starting</button>
+        <div class="top-right">
+          <button type="button" id="sync-status" class="sync" aria-live="polite">Starting</button>
+          <p class="today">Today <strong id="today-total">₹0</strong></p>
+        </div>
       </header>
 
-      <div class="amount-line">
-        <p class="today">Today <strong id="today-total">₹0</strong></p>
-        <output id="amount" class="amount" aria-live="polite"><span class="rupee">₹</span><span id="amount-digits">0</span></output>
+      <div class="search-line">
+        <input id="pad-name" type="text" maxlength="120" autocomplete="off" role="combobox" aria-expanded="false" aria-controls="pad-results" aria-label="Search for an item" placeholder="What did you buy?">
+        <div id="pad-results" class="item-results pad-results" role="listbox" aria-label="Matching items" hidden></div>
       </div>
 
-      <div class="meta-line">
-        <label class="date-chip">
-          <span id="date-label">Today</span>
-          <input id="entry-date" type="date" aria-label="Expense date">
-        </label>
-        <div id="via-chips" class="via-chips" role="group" aria-label="Paid via"></div>
+      <div class="cart" id="cart-area">
+        <div id="cart" class="cart-lines"></div>
+        <div id="cart-quick" class="quick" aria-label="Your frequent items"></div>
+        <div id="pad-files" class="pad-files" hidden></div>
       </div>
 
-      <div class="draft-line">
-        <input id="pad-name" type="text" maxlength="120" autocomplete="off" aria-label="Expense name, optional" placeholder="Expense name">
-        <label class="plain file-pick pad-pick">Photo<input id="pad-photo" type="file" accept="image/*" capture="environment"></label>
-        <label class="plain file-pick pad-pick">Invoice<input id="pad-file" type="file" multiple></label>
-      </div>
-      <div id="pad-files" class="pad-files" hidden></div>
-
-      <div class="cloth">
-        <p id="hint" class="hint">Enter the amount</p>
-        <div id="cats" class="cats" role="group" aria-label="Save to category"></div>
+      <div class="pad">
+        <div class="meta-line">
+          <label class="cell date-chip">
+            <span class="cell-label"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M4 6h16v14H4zM4 10h16M8 3v4M16 3v4" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Date</span>
+            <span id="date-label" class="cell-value">Today</span>
+            <input id="entry-date" type="date" aria-label="Expense date">
+          </label>
+          <button type="button" id="via-cell" class="cell" aria-haspopup="dialog">
+            <span class="cell-label"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M3 6h18v12H3zM3 10h18M7 15h3" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Paid via</span>
+            <span id="via-chip" class="cell-value"></span>
+          </button>
+          <label class="cell file-pick" id="attach-chip">
+            <span class="cell-label"><svg viewBox="0 0 24 24" width="15" height="15" aria-hidden="true"><path d="M20 11.5l-8.5 8.5a5 5 0 0 1-7-7l9-9a3.3 3.3 0 0 1 4.700 4.700l-9 9a1.700 1.700 0 0 1-2.400-2.400l8-8" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/></svg>Invoice</span>
+            <span id="attach-label" class="cell-value">Add</span>
+            <input id="pad-file" type="file" multiple aria-label="Attach a photo or invoice">
+          </label>
+        </div>
+        <button type="button" id="total-row" class="total-row">
+          <span id="total-label">Amount</span>
+          <output id="amount" class="amount"><span class="rupee">₹</span><span id="amount-digits">0</span></output>
+        </button>
         <div class="keys" role="group" aria-label="Amount keypad">
           <button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button>
           <button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button>
           <button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button>
           <button type="button" data-key=".">.</button><button type="button" data-key="0">0</button>
-          <button type="button" data-key="back" aria-label="Delete last digit">
-            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M9 5h11v14H9l-6-7zM12.5 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
-          </button>
+          <button type="button" data-key="back" aria-label="Delete last digit"><svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M9 5h11v14H9l-6-7zM12.5 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg></button>
         </div>
+        <button type="button" id="save" class="save" disabled>Enter an amount</button>
       </div>
     </section>
 
-    <section id="view-history" class="view view-page" aria-label="History">
+    <section id="view-history" class="view view-page" aria-label="Expenses">
       <header class="page-head">
-        <h2>History</h2>
-        <div class="month-nav">
+        <h2>Expenses</h2>
+        <div class="month-nav" id="history-months">
           <button type="button" class="month-prev" aria-label="Previous month">‹</button>
           <span class="month-label"></span>
           <button type="button" class="month-next" aria-label="Next month">›</button>
         </div>
       </header>
       <div class="book-switch page-book" role="group" aria-label="Book"></div>
+      <div id="needs-filter" class="needs-filter" role="group" aria-label="Filter by missing details"></div>
       <div id="person-filter" class="person-filter" role="group" aria-label="Filter by person"></div>
       <div id="history-list" class="ledger"></div>
+    </section>
+
+    <section id="view-dues" class="view view-page" aria-label="Dues">
+      <header class="page-head">
+        <h2>Dues</h2>
+        <button type="button" id="due-add" class="plain">Add a due</button>
+      </header>
+      <p id="dues-total" class="dues-total" hidden></p>
+      <div id="dues-list"></div>
     </section>
 
     <section id="view-summary" class="view view-page" aria-label="Summary">
@@ -140,6 +162,24 @@
       <div class="manage">
         <details id="m-cats"><summary>Categories and subcategories</summary><div id="m-cats-body"></div></details>
         <details id="m-pay"><summary>Payment methods</summary><div id="m-pay-body"></div></details>
+        <details id="m-reminders"><summary>Due reminders by email</summary><div>
+          <form id="rem-form" novalidate class="rem-form">
+            <label>Send to<input id="rem-emails" type="text" inputmode="email" autocomplete="off" autocapitalize="off" placeholder="you@example.com, someone@example.com"></label>
+            <label>Start reminding<select id="rem-days">
+              <option value="1">1 day before</option>
+              <option value="3">3 days before</option>
+              <option value="7">7 days before</option>
+            </select></label>
+            <p class="note">The email goes out from your Google account once a day, around 8 am, and only when something is due or overdue. Leave Send to empty to turn it off.</p>
+            <p id="rem-error" class="form-error" role="alert" hidden></p>
+            <div class="sheet-actions">
+              <button type="button" id="rem-test" class="plain">Send a test email</button>
+              <button type="submit" class="primary">Save reminders</button>
+            </div>
+          </form>
+        </div></details>
+        <details id="m-rules"><summary>Required details</summary><div id="m-rules-body"></div></details>
+        <details id="m-items"><summary>My added items</summary><div id="m-items-body"></div></details>
         <details id="m-labels"><summary>Labels</summary><div id="m-labels-body"></div></details>
         <details id="m-people"><summary>People and access</summary><div id="m-people-body"></div></details>
       </div>
@@ -182,7 +222,7 @@
   </div>
 </section>
 
-<div id="toast" class="toast role="status" hidden>
+<div id="toast" class="toast" role="status" hidden>
   <div class="toast-head">
     <svg class="toast-check" viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5" fill="none" stroke="currentColor" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/></svg>
     <div class="toast-words">
@@ -201,21 +241,25 @@
 <dialog id="edit" class="sheet" aria-labelledby="edit-title">
   <form id="edit-form" method="dialog" novalidate>
     <h2 id="edit-title">Edit expense</h2>
-    <label>Expense name<input id="edit-item" type="text" maxlength="120" autocomplete="off" placeholder="For example, Airtel broadband bill"></label>
-    <label>Receipt or reference no.<input id="edit-receipt" type="text" maxlength="60" autocomplete="off" placeholder="Optional"></label>
-    <label>Note<input id="edit-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional"></label>
+    <p id="edit-missing" class="edit-missing" hidden></p>
+    <div>
+      <label>Item or expense name<input id="edit-item" type="text" maxlength="240" autocomplete="off" placeholder="Search items or type a name"></label>
+      <div id="edit-results" class="item-results" role="listbox" aria-label="Matching items" hidden></div>
+    </div>
     <div class="two">
       <label>Amount (₹)<input id="edit-amount" type="text" inputmode="decimal" autocomplete="off"></label>
-      <label>Date<input id="edit-date" type="date"></label>
+      <label id="edit-date-field">Date<input id="edit-date" type="date"></label>
     </div>
-    <div class="two">
-      <label>Book<select id="edit-book"></select></label>
-      <label>Paid via<select id="edit-via"></select></label>
-    </div>
+    <label id="edit-via-field">Paid via<select id="edit-via"></select></label>
     <div class="two">
       <label>Category<select id="edit-category"></select></label>
       <label id="edit-sub-field">Subcategory<select id="edit-sub"></select></label>
     </div>
+    <details id="edit-more" class="edit-more">
+    <summary>More details</summary>
+    <label id="edit-receipt-field">Receipt or reference no.<input id="edit-receipt" type="text" maxlength="60" autocomplete="off" placeholder="Optional"></label>
+    <label>Note<input id="edit-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional"></label>
+    <label>Book<select id="edit-book"></select></label>
     <div class="labels-box">
       <span class="files-label">Labels</span>
       <div id="edit-labels" class="label-chips" role="group" aria-label="Labels"></div>
@@ -224,12 +268,12 @@
         <button type="button" id="edit-add-label" class="plain">Add</button>
       </div>
     </div>
+    </details>
     <div class="files-box">
       <span class="files-label">Files</span>
       <ul id="edit-files" class="file-list"></ul>
       <div class="file-buttons">
-        <label class="plain file-pick">Attach file<input id="pick-file" type="file" multiple></label>
-        <label class="plain file-pick">Take photo<input id="pick-photo" type="file" accept="image/*" capture="environment"></label>
+        <label class="plain file-pick">Attach file or photo<input id="pick-file" type="file" multiple></label>
       </div>
       <p class="note">Up to 10 files, 10 MB each. Photos are made smaller to save space.</p>
     </div>
@@ -237,8 +281,10 @@
     <p id="edit-error" class="form-error" role="alert" hidden></p>
     <div class="sheet-actions">
       <button type="button" id="edit-delete" class="plain danger">Delete</button>
+      <button type="button" id="edit-delete-order" class="plain danger" hidden>Delete order</button>
       <button type="button" id="edit-cancel" class="plain">Cancel</button>
       <button type="submit" class="primary">Save changes</button>
+      <button type="button" id="edit-next" class="primary" hidden>Save and next</button>
     </div>
   </form>
 </dialog>
@@ -250,6 +296,70 @@
     <button type="button" id="via-manage" class="plain">Manage payment methods</button>
     <button type="button" id="via-close" class="plain">Close</button>
   </div>
+</dialog>
+
+<dialog id="due-edit" class="sheet" aria-labelledby="due-title">
+  <form id="due-form" novalidate>
+    <h2 id="due-title">Add a due</h2>
+    <div>
+      <label>What is it for?<input id="due-name" type="text" maxlength="80" autocomplete="off" placeholder="For example, house rent or car EMI"></label>
+      <div id="due-results" class="item-results" role="listbox" aria-label="Matching items" hidden></div>
+    </div>
+    <div class="two">
+      <label>Amount (₹)<input id="due-amount" type="text" inputmode="decimal" autocomplete="off"></label>
+      <label>Next due date<input id="due-date" type="date"></label>
+    </div>
+    <label class="rule-row"><input id="due-varies" type="checkbox">The amount changes each time</label>
+    <label>Repeats<select id="due-every">
+      <option value="1">Every month</option>
+      <option value="2">Every 2 months</option>
+      <option value="3">Every 3 months</option>
+      <option value="6">Every 6 months</option>
+      <option value="12">Every year</option>
+      <option value="0">One time only</option>
+    </select></label>
+    <div class="two" id="due-emi">
+      <label>Total payments<input id="due-total" type="text" inputmode="numeric" autocomplete="off" placeholder="Optional, for EMIs"></label>
+      <label>Already paid<input id="due-paid" type="text" inputmode="numeric" autocomplete="off" placeholder="0"></label>
+    </div>
+    <label>Note<input id="due-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional, for example Flat 302 or Noida office"></label>
+    <label id="due-via-field">Paid via<select id="due-via"></select></label>
+    <div class="two">
+      <label>Book<select id="due-book"></select></label>
+      <label>Category<select id="due-cat"></select></label>
+    </div>
+    <label id="due-sub-field">Subcategory<select id="due-sub"></select></label>
+    <p id="due-error" class="form-error" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="due-delete" class="plain danger" hidden>Delete</button>
+      <button type="button" id="due-cancel" class="plain">Cancel</button>
+      <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="due-pay" class="sheet" aria-labelledby="pay-title">
+  <form id="pay-form" novalidate>
+    <h2 id="pay-title"></h2>
+    <p id="pay-progress" class="note"></p>
+    <div class="two">
+      <label>Amount paid (₹)<input id="pay-amount" type="text" inputmode="decimal" autocomplete="off"></label>
+      <label>Date paid<input id="pay-date" type="date"></label>
+    </div>
+    <label>Paid via<select id="pay-via"></select></label>
+    <label>Note<input id="pay-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional, for example November rent for Flat 302"></label>
+    <p id="pay-error" class="form-error" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="pay-cancel" class="plain">Cancel</button>
+      <button type="submit" class="primary">Save payment</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="cat-picker" class="sheet" aria-labelledby="cat-title">
+  <h2 id="cat-title">Category</h2>
+  <div id="cat-list" class="via-list"></div>
+  <div class="sheet-actions"><button type="button" id="cat-close" class="plain">Close</button></div>
 </dialog>
 
 <dialog id="list-edit" class="sheet" aria-labelledby="list-title">
@@ -264,6 +374,23 @@
     <div class="sheet-actions">
       <button type="button" id="list-cancel" class="plain">Cancel</button>
       <button type="submit" class="primary">Save</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="item-edit" class="sheet" aria-labelledby="item-title">
+  <form id="item-form" novalidate>
+    <h2 id="item-title">Add a new item</h2>
+    <label>Item name<input id="item-name" type="text" maxlength="80" autocomplete="off"></label>
+    <label>Category<select id="item-cat"></select></label>
+    <label id="item-newcat-field" hidden>New category name<input id="item-newcat" type="text" maxlength="60" autocomplete="off"></label>
+    <label>Subcategory<select id="item-sub"></select></label>
+    <label id="item-newsub-field" hidden>New subcategory name<input id="item-newsub" type="text" maxlength="80" autocomplete="off"></label>
+    <p class="note">Next time, searching for this item fills in its category and subcategory.</p>
+    <p id="item-error" class="form-error" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="item-cancel" class="plain">Cancel</button>
+      <button type="submit" class="primary">Save item</button>
     </div>
   </form>
 </dialog>
@@ -323,6 +450,7 @@
   </div>
 </dialog>
 
+<script src="catalog.js"></script>
 <script src="app.js"></script>
 </body>
 </html>
