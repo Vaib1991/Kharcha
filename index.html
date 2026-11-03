@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="en-IN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>Kharcha</title>
+<meta name="description" content="Log household expenses in seconds, online or offline.">
+<meta name="theme-color" content="#8f1a20">
+<link rel="manifest" href="manifest.webmanifest">
+<link rel="icon" href="icons/icon-192.png">
+<link rel="apple-touch-icon" href="icons/apple-touch-icon.png">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-title" content="Kharcha">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<link rel="stylesheet" href="styles.css">
+</head>
+<body data-view="add" class="booting">
+
+<section id="setup" class="setup" hidden>
+  <h1>Kharcha</h1>
+  <p class="setup-lead">Connect this device to your Google Sheet. You only do this once on each device.</p>
+  <div class="segmented" role="group" aria-label="How to connect">
+    <button type="button" id="mode-code" aria-pressed="true">I have a setup code</button>
+    <button type="button" id="mode-manual" aria-pressed="false">First device</button>
+  </div>
+  <form id="setup-form" novalidate>
+    <label id="field-code">Setup code
+      <textarea id="setup-code" rows="3" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="Paste the code from your other device"></textarea>
+    </label>
+    <label id="field-url" hidden>Web app URL
+      <input id="setup-url" type="url" inputmode="url" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="https://script.google.com/…/exec">
+    </label>
+    <label id="field-key" hidden>Secret key
+      <input id="setup-key" type="text" autocomplete="off" autocapitalize="off" spellcheck="false" placeholder="From the Apps Script log">
+    </label>
+    <label>Your name
+      <input id="setup-name" type="text" autocomplete="given-name" maxlength="40" placeholder="Shown next to your expenses">
+    </label>
+    <p id="setup-error" class="form-error" role="alert" hidden></p>
+    <button type="submit" id="setup-go" class="primary">Connect</button>
+  </form>
+</section>
+
+<div id="app" class="app" hidden>
+  <nav class="tabs" aria-label="Main">
+    <span class="wordmark">Kharcha</span>
+    <button type="button" data-go="add" class="only-phone">Add</button>
+    <button type="button" data-go="history">History</button>
+    <button type="button" data-go="summary">Summary</button>
+    <button type="button" data-go="settings">Settings</button>
+  </nav>
+
+  <main class="views">
+    <section id="view-add" class="view view-add" aria-label="Add an expense">
+      <header class="page-top">
+        <p class="today">Today <strong id="today-total">₹0</strong></p>
+        <button type="button" id="sync-status" class="sync" aria-live="polite">Starting</button>
+      </header>
+
+      <div class="amount-line">
+        <output id="amount" class="amount" aria-live="polite"><span class="rupee">₹</span><span id="amount-digits">0</span></output>
+      </div>
+
+      <div class="meta-line">
+        <label class="date-chip">
+          <span id="date-label">Today</span>
+          <input id="entry-date" type="date" aria-label="Expense date">
+        </label>
+        <div id="via-chips" class="via" role="group" aria-label="Paid via"></div>
+      </div>
+
+      <div class="cloth">
+        <p id="hint" class="hint">Enter the amount</p>
+        <div id="cats" class="cats" role="group" aria-label="Save to category"></div>
+        <div class="keys" role="group" aria-label="Amount keypad">
+          <button type="button" data-key="1">1</button><button type="button" data-key="2">2</button><button type="button" data-key="3">3</button>
+          <button type="button" data-key="4">4</button><button type="button" data-key="5">5</button><button type="button" data-key="6">6</button>
+          <button type="button" data-key="7">7</button><button type="button" data-key="8">8</button><button type="button" data-key="9">9</button>
+          <button type="button" data-key=".">.</button><button type="button" data-key="0">0</button>
+          <button type="button" data-key="back" aria-label="Delete last digit">
+            <svg viewBox="0 0 24 24" width="24" height="24" aria-hidden="true"><path d="M9 5h11v14H9l-6-7zM12.5 9.5l5 5m0-5l-5 5" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/></svg>
+          </button>
+        </div>
+      </div>
+    </section>
+
+    <section id="view-history" class="view view-page" aria-label="History">
+      <header class="page-head">
+        <h2>History</h2>
+        <div class="month-nav">
+          <button type="button" class="month-prev" aria-label="Previous month">‹</button>
+          <span class="month-label"></span>
+          <button type="button" class="month-next" aria-label="Next month">›</button>
+        </div>
+      </header>
+      <div id="person-filter" class="person-filter" role="group" aria-label="Filter by person"></div>
+      <div id="history-list" class="ledger"></div>
+    </section>
+
+    <section id="view-summary" class="view view-page" aria-label="Summary">
+      <header class="page-head">
+        <h2>Summary</h2>
+        <div class="month-nav">
+          <button type="button" class="month-prev" aria-label="Previous month">‹</button>
+          <span class="month-label"></span>
+          <button type="button" class="month-next" aria-label="Next month">›</button>
+        </div>
+      </header>
+      <div id="summary-body"></div>
+    </section>
+
+    <section id="view-settings" class="view view-page" aria-label="Settings">
+      <header class="page-head"><h2>Settings</h2></header>
+      <dl class="facts">
+        <div><dt>Your name</dt><dd id="set-name"></dd></div>
+        <div><dt>Last synced</dt><dd id="set-last"></dd></div>
+        <div><dt>Waiting to sync</dt><dd id="set-waiting"></dd></div>
+      </dl>
+      <div class="stack">
+        <button type="button" id="btn-sync" class="plain">Sync now</button>
+        <button type="button" id="btn-code" class="plain">Copy setup code for another device</button>
+        <p id="code-note" class="note" hidden>Copied. Paste it into Kharcha on the other device. It works like a password, so send it only to your own devices or your spouse.</p>
+        <button type="button" id="btn-refresh" class="plain">Reload everything from the Sheet</button>
+        <p class="note">Categories and payment methods are edited in the Settings tab of your Google Sheet.</p>
+        <button type="button" id="btn-disconnect" class="plain danger">Disconnect this device</button>
+      </div>
+    </section>
+  </main>
+</div>
+
+<div id="toast" class="toast" role="status" hidden>
+  <span id="toast-text"></span>
+  <button type="button" id="toast-note" hidden>Add note</button>
+  <button type="button" id="toast-undo" hidden>Undo</button>
+</div>
+
+<dialog id="edit" class="sheet" aria-labelledby="edit-title">
+  <form id="edit-form" method="dialog" novalidate>
+    <h2 id="edit-title">Edit expense</h2>
+    <label>Amount (₹)<input id="edit-amount" type="text" inputmode="decimal" autocomplete="off"></label>
+    <label>Category<select id="edit-category"></select></label>
+    <div class="two">
+      <label>Date<input id="edit-date" type="date"></label>
+      <label>Paid via<select id="edit-via"></select></label>
+    </div>
+    <label>Note<input id="edit-note" type="text" maxlength="300" autocomplete="off" placeholder="Optional"></label>
+    <p id="edit-by" class="note"></p>
+    <p id="edit-error" class="form-error" role="alert" hidden></p>
+    <div class="sheet-actions">
+      <button type="button" id="edit-delete" class="plain danger">Delete</button>
+      <button type="button" id="edit-cancel" class="plain">Cancel</button>
+      <button type="submit" class="primary">Save changes</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="confirm" class="sheet" aria-labelledby="confirm-title">
+  <h2 id="confirm-title">Disconnect this device?</h2>
+  <p id="confirm-text" class="note"></p>
+  <div class="sheet-actions">
+    <button type="button" id="confirm-no" class="plain">Keep connected</button>
+    <button type="button" id="confirm-yes" class="plain danger">Disconnect</button>
+  </div>
+</dialog>
+
+<script src="app.js"></script>
+</body>
+</html>
